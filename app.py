@@ -41,7 +41,7 @@ sms_activate_url = "https://sms-activate.org/stubs/handler_api.php"
 phone_request_params = {
     "api_key":API_KEY,
     "action":"getNumber",
-    "country":COUNTRY_CODE, 
+    "country":COUNTRY_CODE,
     "service":"go",
 }
 
@@ -57,16 +57,27 @@ SELECTORS = {
         ],
     'for_my_personal_use':[
         "//span[@class='VfPpkd-StrnGf-rymPhb-b9t22c']",
-        ], 
+        ],
     "first_name":"//*[@name='firstName']",
     "last_name":"//*[@name='lastName']",
     "username":"//*[@name='Username']",
     "password":"//*[@name='Passwd']",
     "confirm_password":"//*[@name='PasswdAgain']",
     "next":[
+            # Button with a span that says "Next"
+            "//button[.//span[normalize-space()='Next']]",
+            # Fallback: span "Next" -> nearest button ancestor
+            "//span[normalize-space()='Next']/ancestor::button[1]",
+
+            # Some pages use role=button instead of <button>
+            "//*[@role='button'][.//span[normalize-space()='Next']]",
+
+            # “I agree” variants, same idea
+            "//button[.//span[normalize-space()='I agree']]",
+            "//span[normalize-space()='I agree']/ancestor::*[@role='button' or self::button][1]",
             "//button[@class='VfPpkd-LgbsSe VfPpkd-LgbsSe-OWXEXe-k8QpJ VfPpkd-LgbsSe-OWXEXe-dgl2Hf nCP5yc AjY5Oe DuMIQc LQeN7 qIypjc TrZEUc lw1w4b']",
             "//button[contains(text(),'Next')]",
-            "//button[contains(text(),'I agree')]"
+            "//button[contains(text(),'I agree')]",
     ],
     "phone_number":"//*[@id='phoneNumberId']",
     "code":'//input[@name="code"]',
@@ -81,9 +92,9 @@ SELECTORS = {
 # https://webflow.com/made-in-webflow/fast , I tried to find the fast websites and you can add more.
 SITE_LIST = [
     'https://google.com',
-    'https://wizardrytechnique.webflow.io/',
+    'https://www.scalemates.com',
     'https://www.rachelbavaresco.com/',
-    'https://lightning-bolt.webflow.io/'
+    'https://www.berkshirehathaway.com'
 ]
 proxy_list = None
 with open("./data/Proxy_DB.csv", 'r') as proxy_list_file:
@@ -182,7 +193,9 @@ def setDriver():
 
     # Set Proxy
     # proxy = getProxy() # Rotating proxy
+
     SOCKS_PROXY = "socks5://14ab1e7131541:39d813de77@198.143.22.234:12324" # Fixed proxy, i.e socks5://14ab1e7131541:39d813de77@176.103.246.143:12324
+
     # SOCKS_PROXY = "socks5://user:pass@ip:port" # Fixed proxy, i.e socks5://14ab1e7131541:39d813de77@176.103.246.143:12324
     # SOCKS_PROXY = 'socks5://158.69.225.110:59166'
 
@@ -255,7 +268,7 @@ def setDriver():
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options = options, seleniumwire_options=seleniumwire_options)
     #driver = webdriver.Firefox(service=Service(GeckoDriverManager().install()), options = options, seleniumwire_options=seleniumwire_options)
-    
+
     return driver
 
 def main():
@@ -295,7 +308,7 @@ def main():
     while True:
         try:
             # Check if the count reach to the maxium users.
-            
+
             if i == user_number:
                 break
 
@@ -333,9 +346,10 @@ def main():
 
             # 4 ways to go to account creation page.
             random_int = random.randint(1,4)
+            random_int = 3
             if random_int ==  1:
 
-                print('################ Creat a google account article ################')
+                print('################ Create an google account article ################')
                 driver.get('https://support.google.com/accounts/answer/27441?hl=en')
                 WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH,'//*[@id="hcfe-content"]/section/div/div[1]/article/section/div/div[1]/div/div[2]/a[1]'))).click()
                 time.sleep(WAIT)
@@ -344,7 +358,7 @@ def main():
                 driver.get("https://accounts.google.com")
 
                 time.sleep(WAIT)
-                
+
                 print('################ Click "Create account" ################')
                 for selector in SELECTORS["create_account"]:
                     try:
@@ -352,7 +366,7 @@ def main():
                         break
                     except:
                         pass
-                print('################ Click "For my personal use" ################')
+                print('################ Click "For myself" ################')
                 for selector in SELECTORS["for_my_personal_use"]:
                     try:
                         WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, selector))).click()
@@ -363,7 +377,7 @@ def main():
             elif random_int == 3:
                 driver.get('https://accounts.google.com/signup/v2/webcreateaccount?flowName=GlifWebSignIn&flowEntry=SignUp')
                 time.sleep(WAIT)
-            
+
             elif random_int == 4:
                 driver.get('https://support.google.com/mail/answer/56256?hl=en')
                 WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH,'//*[@id="hcfe-content"]/section/div/div[1]/article/section/div/div[1]/div/p[1]/a'))).click()
@@ -392,22 +406,32 @@ def main():
                 last_name_tag = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['last_name'])))
                 last_name_tag.clear()
                 last_name_tag.send_keys(last_name)
-
-                #click next button
-                print('################ "Next" ################')
+                print(last_name)
+                print('################ Click "Next" Button ################')
+                clicked = False
                 for selector in SELECTORS['next']:
                     try:
-                        WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, selector))).click()
+                        el = WebDriverWait(driver, WAIT).until(
+                            EC.element_to_be_clickable((By.XPATH, selector))
+                        )
+                        # Regular click sometimes gets blocked by overlays; JS click as a backup:
+                        try:
+                            el.click()
+                        except Exception:
+                            driver.execute_script("arguments[0].click();", el)
+                        clicked = True
                         break
-                    except:
+                    except Exception:
                         pass
-                time.sleep(WAIT*2)
 
+                if not clicked:
+                    print("Could not find a clickable Next button with the current selectors.")
+                    raise Exception("Go to next account.")
                 print('################ 2st step of Creation Wizard. ################')
                 print('################ Birthday & Gender ################')
-                # Date   
+                # Date
                 WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_day']))).send_keys(birthday.split('/')[1])
-                
+
                 # Month
                 select_acc_month = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_month'])))
 
@@ -525,7 +549,7 @@ def main():
                     if "ACCESS_NUMBER" in data:
                         activationId = data.split(':')[1]
                         number = data.split(':')[2]
-                        
+
                         number = '+'+ number
                         print(number)
                         break
@@ -537,7 +561,7 @@ def main():
                 if number == '':
                     print("################ Cannot get phone number: ", REQUEST_MAX_TRY, " times retrial. ################")
                     raise Exception("Go to next account.")
-                
+
                 phone_number_input.send_keys(number)
 
                 #click next button
@@ -572,7 +596,7 @@ def main():
                     print('Cannot receive code from sms_activate: ',REQUEST_MAX_TRY, " times retrial")
                     raise Exception("Go to next account.")
 
-                print('################ Verify Phone Code ################')  
+                print('################ Verify Phone Code ################')
                 WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['code']))).send_keys(code)
 
                 #click next button
@@ -589,9 +613,9 @@ def main():
             # WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_phone_number']))).clear()
 
             # print('################ Account Birthday ################')
-            # # Date   
+            # # Date
             # WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_day']))).send_keys(birthday.split('/')[1])
-            
+
             # # Month
             # select_acc_month = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_month'])))
 
@@ -618,7 +642,7 @@ def main():
             time.sleep(WAIT)
 
             # Scroll to click "I agree"
-            driver.execute_script("window.scrollTo(0, 800)") 
+            driver.execute_script("window.scrollTo(0, 800)")
             time.sleep(WAIT)
             for selector in SELECTORS['next']:
                 try:
