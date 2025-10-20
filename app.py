@@ -12,6 +12,11 @@ from selenium.common.exceptions import *
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 from dotenv import load_dotenv
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+import re
 import os
 import time
 import random
@@ -19,7 +24,6 @@ import datetime
 import requests
 import csv
 import string
-from fp.fp import FreeProxy
 from fake_useragent import UserAgent
 
 # Option for Auto User info generation
@@ -136,7 +140,110 @@ def test_proxy(proxy_url: str):
     except Exception as e:
         print("❌ Proxy test failed:", e)
 
+import random, time
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
+# ---------- tiny timing utils ----------
+def human_pause(lo_ms: int = 120, hi_ms: int = 280):
+    time.sleep(random.uniform(lo_ms, hi_ms) / 1000.0)
+
+def jitter(base_ms: int, pct: float = 0.35) -> float:
+    delta = base_ms * pct
+    return (base_ms + random.uniform(-delta, delta)) / 1000.0
+
+# ---------- element getters ----------
+def wait_clickable(driver, xpath, wait=10):
+    return WebDriverWait(driver, wait).until(EC.element_to_be_clickable((By.XPATH, xpath)))
+
+def wait_visible(driver, xpath, wait=10):
+    return WebDriverWait(driver, wait).until(EC.visibility_of_element_located((By.XPATH, xpath)))
+
+# ---------- core actions ----------
+def click_human(driver, xpath, wait=10) -> bool:
+    try:
+        el = wait_clickable(driver, xpath, wait)
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        human_pause()
+        try:
+            el.click()
+        except Exception:
+            # overlay or intercept? try JS click
+            driver.execute_script("arguments[0].click();", el)
+        human_pause()
+        return True
+    except Exception:
+        return False
+
+def clear_input(el):
+    # robust clear: select all then delete (covers shadow text etc.)
+    el.send_keys(Keys.CONTROL, "a")
+    el.send_keys(Keys.DELETE)
+
+def type_text_like_human(el, text: str, min_delay_ms=25, max_delay_ms=90):
+    for ch in text:
+        el.send_keys(ch)
+        time.sleep(random.uniform(min_delay_ms, max_delay_ms) / 1000.0)
+
+def fill_human(driver, xpath, text: str, wait=10, per_char=(25, 90)):
+    el = wait_clickable(driver, xpath, wait)
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+    human_pause()
+    try:
+        el.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", el)
+    human_pause()
+    clear_input(el)
+    # type slowly if short, paste fast if long (then a tiny jitter type to mimic user)
+    if len(text) <= 40:
+        type_text_like_human(el, text, per_char[0], per_char[1])
+    else:
+        el.send_keys(text)
+        human_pause(80, 160)
+        # add two random chars then backspace to simulate correction (optional realism)
+        for ch in random.sample("abcdefghijklmnopqrstuvwxyz", 2):
+            el.send_keys(ch)
+            time.sleep(jitter(40))
+        el.send_keys(Keys.BACK_SPACE, Keys.BACK_SPACE)
+    human_pause()
+
+def submit_human_by_enter(driver, field_xpath, wait=10):
+    el = wait_visible(driver, field_xpath, wait)
+    el.send_keys(Keys.ENTER)
+    human_pause()
+
+# ---------- convenience for your common actions ----------
+def click_next(driver, wait=10, raise_on_fail=True) -> bool:
+    """
+    Clicks the 'Next' (or 'I agree') button using SELECTORS['next'].
+    - Uses human-like click via click_human(...)
+    - Does a short post-click wait
+    - Prints inline form errors via collect_errors(...)
+    - If nothing clickable is found, raises Exception(...) unless raise_on_fail=False
+    """
+    for xp in SELECTORS['next']:
+        if click_human(driver, xp, wait):
+            # short post-click tick so client-side validation can render
+            try:
+                WebDriverWait(driver, 10).until(lambda d: True)
+            except Exception:
+                pass
+            # print any inline/banner errors
+            try:
+                errs = collect_errors(driver)
+                if errs:
+                    print("Errors:", errs)
+            except Exception:
+                pass
+            return True
+
+    print("Could not find a clickable Next button with the current selectors.")
+    if raise_on_fail:
+        raise Exception("Go to next account.")
+    return False
 
 
 def generatePassword():
@@ -297,26 +404,6 @@ def collect_errors(driver, wait=10):
 
     return msgs
 
-
-def human_pause(lo_ms: int = 250, hi_ms: int = 600):
-    """Tiny randomized pause to look less robotic."""
-    time.sleep(random.uniform(lo_ms, hi_ms) / 1000.0)
-
-def click_next(driver, wait=10) -> bool:
-    """Robust 'Next' click: clickable wait, JS fallback, tries all selectors."""
-    for selector in SELECTORS['next']:
-        try:
-            el = WebDriverWait(driver, wait).until(EC.element_to_be_clickable((By.XPATH, selector)))
-            try:
-                el.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", el)
-            human_pause()
-            return True
-        except Exception:
-            continue
-    print("Could not find a clickable Next button with the current selectors.")
-    return False
 
 GMAIL_USER_RE = re.compile(r'[^a-z0-9.]')  # Gmail local-part rules we enforce
 
@@ -560,28 +647,16 @@ def main():
                 print("################ Generate User Try: ", username_try+1, " ################")
                 # set the first name.
                 print('################ First Name ################')
-                first_name_tag = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['first_name'])))
-                first_name_tag.clear()
-                time.sleep(WAIT/2)
+                fill_human(driver, SELECTORS['first_name'], first_name, wait=WAIT)
                 print(first_name)
-                first_name_tag.send_keys(first_name)
 
                 # set the surname.
                 print('################ Last Name ################')
-                last_name_tag = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['last_name'])))
-                last_name_tag.clear()
-                last_name_tag.send_keys(last_name)
+                fill_human(driver, SELECTORS['last_name'], last_name, wait=WAIT)
                 print(last_name)
                 print('################ Click "Next" Button ################')
-                if not click_next(driver, WAIT):
-                    raise Exception("Go to next account.")
-                WebDriverWait(driver, 10).until(lambda d: True)
-                print("Errors:", collect_errors(driver))
+                click_next(driver, WAIT)
 
-                # Usage right after submit:
-                # click submit...
-                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
-                print("Errors:", collect_errors(driver))
 
                 print('################ 2st step of Creation Wizard. ################')
                 print('################ Birthday & Gender ################')
@@ -611,18 +686,9 @@ def main():
                     '1'  # Male
                 )
 
-
-                #click next button
                 print('################ Click "Next" Button ################')
-                if not click_next(driver, WAIT):
-                    raise Exception("Go to next account.")
-                WebDriverWait(driver, 10).until(lambda d: True)
-                print("Errors:", collect_errors(driver))
+                click_next(driver, WAIT)
 
-                # Usage right after submit:
-                # click submit...
-                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
-                print("Errors:", collect_errors(driver))
 
                 # Page for selecting email address
                 print('################ 3st step of Creation Wizard. ################')
@@ -638,24 +704,10 @@ def main():
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", radio)
                 radio.click()
 
-                box = WebDriverWait(driver, WAIT).until(
-                    EC.visibility_of_element_located((By.XPATH, SELECTORS["custom_username_input"]))
-                )
-                box.clear()
-                box.send_keys(user_name)
+                fill_human(driver, SELECTORS['custom_username_input'], user_name, wait=WAIT)
 
-
-                #click next button
                 print('################ Click "Next" Button ################')
-                if not click_next(driver, WAIT):
-                    raise Exception("Go to next account.")
-                WebDriverWait(driver, 10).until(lambda d: True)
-                print("Errors:", collect_errors(driver))
-
-                # Usage right after submit:
-                # click submit...
-                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
-                print("Errors:", collect_errors(driver))
+                click_next(driver, WAIT)
 
 
                 print('################ Check Username Validation ################')
@@ -671,21 +723,13 @@ def main():
 
                 # set password
                 print('################ Set Password ################')
-                passwd_tag =WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['password'])))
-                passwd_tag.clear()
-                passwd_tag.send_keys(password)
+                fill_human(driver, SELECTORS['password'], password, wait=WAIT)
 
                 print('################ Set Confirm Password ################')
-                confirmwd_tag = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['confirm_password'])))
-                confirmwd_tag.clear()
-                confirmwd_tag.send_keys(password)
+                fill_human(driver, SELECTORS['confirm_password'], password, wait=WAIT)
 
-                #click next button
                 print('################ Click "Next" Button ################')
-                if not click_next(driver, WAIT):
-                    raise Exception("Go to next account.")
-                WebDriverWait(driver, 10).until(lambda d: True)
-                print("Errors:", collect_errors(driver))
+                click_next(driver, WAIT)
 
                 errs = collect_errors(driver)
                 if errs:
@@ -696,10 +740,7 @@ def main():
                         username_try += 1
                         continue
 
-                # Usage right after submit:
-                # click submit...
-                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
-                print("Errors:", collect_errors(driver))
+
 
                 print('################ Check Phone Verification ################')
                 without_verification = False
@@ -745,12 +786,8 @@ def main():
 
                 phone_number_input.send_keys(number)
 
-                #click next button
                 print('################ Click "Next" Button ################')
-                if not click_next(driver, WAIT):
-                    raise Exception("Go to next account.")
-                WebDriverWait(driver, 10).until(lambda d: True)
-                print("Errors:", collect_errors(driver))
+                click_next(driver, WAIT)
 
                 print('################ Get SMS Code from SMS_Activate ################')
                 time.sleep(WAIT)
@@ -778,7 +815,6 @@ def main():
                 print('################ Verify Phone Code ################')
                 WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['code']))).send_keys(code)
 
-                #click next button
                 print('################ Click "Verify" Buton ################')
                 for selector in SELECTORS['next']:
                     try:
