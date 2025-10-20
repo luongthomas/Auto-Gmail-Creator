@@ -1,0 +1,5 @@
+# .gitignore
+.env
+settings.json
+launch.json
+Proxy_DB.csv

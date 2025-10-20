@@ -11,6 +11,8 @@ from selenium.webdriver.common.proxy import Proxy, ProxyType
 from selenium.common.exceptions import *
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
+from dotenv import load_dotenv
+import os
 import time
 import random
 import datetime
@@ -82,11 +84,28 @@ SELECTORS = {
     "phone_number":"//*[@id='phoneNumberId']",
     "code":'//input[@name="code"]',
     "acc_phone_number":'//input[@id="phoneNumberId"]',
-    "acc_day":'//input[@name="day"]',
-    "acc_month":'//select[@id="month"]',
-    "acc_year":'//input[@name="year"]',
-    "acc_gender":'//select[@id="gender"]',
-    "username_warning":'//*[@class="jibhHc"]',
+
+    # Basic Information Screen
+    "acc_day":  "//input[@id='day' and @name='day']",
+    "acc_year": "//input[@id='year' and @name='year']",
+
+    # combobox containers (not <select>)
+    "acc_month_box":  "//div[@id='month']//div[@role='combobox']",
+    "acc_gender_box": "//div[@id='gender']//div[@role='combobox']",
+
+    # listboxes (appear after clicking the combobox)
+    "acc_month_list":  "//div[@id='month']//ul[@role='listbox' and @aria-label='Month']",
+    "acc_gender_list": "//div[@id='gender']//ul[@role='listbox' and @aria-label='Gender']",
+
+    # Clickable radio wrapper whose label text matches exactly:
+    "radio_custom_wrapper": (
+        "//div[@role='radiogroup']"
+        "//div[contains(@class,'sfqPrd')][.//div[@jsname='CeL6Qc' and normalize-space()='Create your own Gmail address']]"
+    ),
+    # The input that appears after selecting the custom option:
+    "custom_username_input": "//input[@name='Username' and @aria-label='Create a Gmail address']",
+
+    "username_warning":'//*[@class="Jj6Lae"]',
     "username_select":'//*[@aria-posinset="3"]'
 }
 # https://webflow.com/made-in-webflow/fast , I tried to find the fast websites and you can add more.
@@ -100,6 +119,25 @@ proxy_list = None
 with open("./data/Proxy_DB.csv", 'r') as proxy_list_file:
     proxy_list = csv.reader(proxy_list_file)
     proxy_list = list(proxy_list)
+
+
+
+
+def test_proxy(proxy_url: str):
+    proxies = {
+        "http": proxy_url,
+        "https": proxy_url,
+    }
+
+    try:
+        resp = requests.get("https://api.ipify.org?format=json", proxies=proxies, timeout=10)
+        print("✅ Proxy connected successfully!")
+        print("Your public IP via proxy:", resp.json()["ip"])
+    except Exception as e:
+        print("❌ Proxy test failed:", e)
+
+
+
 
 def generatePassword():
     chars = string.ascii_uppercase + string.ascii_lowercase + string.digits + string.punctuation
@@ -183,6 +221,125 @@ def getRandomeUserAgent():
     agent = random.choice(UAGENTS)
     return agent
 
+def set_input(driver, xpath, value):
+    el = WebDriverWait(driver, WAIT).until(EC.element_to_be_clickable((By.XPATH, xpath)))
+    el.clear()
+    el.send_keys(value)
+
+def select_combobox_by_value(driver, box_xpath, list_xpath, value):
+    # open the dropdown
+    box = WebDriverWait(driver, WAIT).until(EC.element_to_be_clickable((By.XPATH, box_xpath)))
+    box.click()
+
+    # wait for its listbox to be visible
+    WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located((By.XPATH, list_xpath)))
+
+    # click the option by data-value
+    # (Month options use 1..12; Gender uses 1..4 per your snippet)
+    opt_xpath = f"{list_xpath}//li[@role='option' and @data-value='{value}']"
+    opt = WebDriverWait(driver, WAIT).until(EC.element_to_be_clickable((By.XPATH, opt_xpath)))
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
+    opt.click()
+
+
+def normalize_proxy(proxy: str, default_scheme: str = "https") -> str:
+    """
+    Normalize a proxy string into the format:
+        scheme://user:pass@host:port
+
+    Supports:
+      - 46.232.98.193:61234:user:pass
+      - user:pass@ip:port
+      - https://user:pass@ip:port
+      - socks5://user:pass@ip:port
+      - ip:port
+    """
+    proxy = proxy.strip()
+
+    # already has scheme
+    if "://" in proxy:
+        return proxy
+
+    # if it’s ip:port:user:pass
+    parts = proxy.split(":")
+    if len(parts) == 4:
+        ip, port, user, pwd = parts
+        return f"{default_scheme}://{user}:{pwd}@{ip}:{port}"
+
+    # if it’s user:pass@ip:port or ip:port
+    if "@" in proxy:
+        return f"{default_scheme}://{proxy}"
+    return f"{default_scheme}://{proxy}"
+
+
+def collect_errors(driver, wait=10):
+    msgs = []
+
+    # Field-level messages (Material input helpers)
+    sel_helpers = (
+        "//div[@jsname='ty6ygf' and normalize-space(string())!='']"
+        "|//div[contains(@class,'Ekjuhf') and @jsname='ty6ygf' and normalize-space(string())!='']"
+    )
+    for el in driver.find_elements(By.XPATH, sel_helpers):
+        text = el.text.strip()
+        if text:
+            msgs.append(text)
+
+    # Region-level / banners / alerts
+    sel_alerts = (
+        "//div[@role='alert' or @aria-live='polite' or @aria-live='assertive']"
+        "[normalize-space(string())!='']"
+    )
+    for el in driver.find_elements(By.XPATH, sel_alerts):
+        t = el.text.strip()
+        if t and t not in msgs:
+            msgs.append(t)
+
+    return msgs
+
+
+def human_pause(lo_ms: int = 250, hi_ms: int = 600):
+    """Tiny randomized pause to look less robotic."""
+    time.sleep(random.uniform(lo_ms, hi_ms) / 1000.0)
+
+def click_next(driver, wait=10) -> bool:
+    """Robust 'Next' click: clickable wait, JS fallback, tries all selectors."""
+    for selector in SELECTORS['next']:
+        try:
+            el = WebDriverWait(driver, wait).until(EC.element_to_be_clickable((By.XPATH, selector)))
+            try:
+                el.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", el)
+            human_pause()
+            return True
+        except Exception:
+            continue
+    print("Could not find a clickable Next button with the current selectors.")
+    return False
+
+GMAIL_USER_RE = re.compile(r'[^a-z0-9.]')  # Gmail local-part rules we enforce
+
+def sanitize_gmail_username(base: str, min_len: int = 6, max_len: int = 30) -> str:
+    """
+    Conform to Gmail rules:
+      - Only letters, numbers, periods
+      - No leading/trailing dot
+      - No consecutive dots
+      - 6..30 chars
+      - No @gmail.com appended here
+    """
+    s = base.lower()
+    s = GMAIL_USER_RE.sub('.', s)            # replace invalid chars with dot
+    s = re.sub(r'\.+', '.', s)               # collapse consecutive dots
+    s = s.strip('.')                         # no leading/trailing dot
+    if len(s) < min_len:
+        s = (s + str(random.randint(100000, 999999)))[:min_len]
+    if len(s) > max_len:
+        s = s[:max_len].rstrip('.') or 'user'  # avoid trailing dot after slice
+    return s
+
+
 # This method is for chrome driver initialization. You can customize if you want.
 def setDriver():
     seleniumwire_options = {}
@@ -191,41 +348,49 @@ def setDriver():
     # Secure Connection
     # seleniumwire_options['verify_ssl'] = True
 
-    # Set Proxy
-    # proxy = getProxy() # Rotating proxy
+        # .env may set SOCKS_PROXY (e.g., socks5://user:pass@ip:port)
+    load_dotenv()
+    SOCKS_PROXY = os.getenv("SOCKS_PROXY") or ""
+    if SOCKS_PROXY and "://" not in SOCKS_PROXY:
+        # allow plain ip:port:user:pass -> default to socks5
+        SOCKS_PROXY = normalize_proxy(SOCKS_PROXY, default_scheme="socks5")
 
-    SOCKS_PROXY = "socks5://14ab1e7131541:39d813de77@198.143.22.234:12324" # Fixed proxy, i.e socks5://14ab1e7131541:39d813de77@176.103.246.143:12324
+    print("Using proxy:", SOCKS_PROXY or "(none)")
 
-    # SOCKS_PROXY = "socks5://user:pass@ip:port" # Fixed proxy, i.e socks5://14ab1e7131541:39d813de77@176.103.246.143:12324
-    # SOCKS_PROXY = 'socks5://158.69.225.110:59166'
-
-    # https://pypi.org/project/free-proxy/
-    try:
-        random_proxy = FreeProxy(timeout=1).get()
-        print('################ Use FreeProxy library to get HTTP proxy ################')
-    except:
-        print('################ Use Proxy DB to get HTTP proxy ################')
-        random_proxy = "http://"+ random.choice(proxy_list)[0]
-
-    HTTP_PROXY = random_proxy
+    print('################ Use Proxy DB to get HTTP proxy ################')
+    random_proxy = "http://" + random.choice(proxy_list)[0]
+    HTTP_PROXY = normalize_proxy(random_proxy, default_scheme="http")
     print(HTTP_PROXY)
-    # HTTPS_PROXY = "https://user:pass@ip:port"
 
-    # Proxy
-    proxy_options = {}
-    proxy_options['no_proxy']= 'localhost,127.0.0.1'
+    # Quick connectivity test (SOCKS if provided, else HTTP)
+    probe = SOCKS_PROXY or HTTP_PROXY
+    test_proxy(probe)
+    try:
+        real_ip = requests.get("https://api.ipify.org?format=json", timeout=8).json()["ip"]
+        print("Your real IP:", real_ip)
+    except Exception as e:
+        print("Could not fetch real IP:", e)
 
-    ## Http proxy
-    proxy_options['http'] = HTTP_PROXY
+    try:
+        proxy_ip = requests.get("https://api.ipify.org?format=json",
+                                proxies={"http": probe, "https": probe}, timeout=8).json()["ip"]
+        print("Your proxy IP:", proxy_ip)
+    except Exception as e:
+        print("Could not fetch proxy IP via proxy:", e)
 
-    ## Https proxy
-    # proxy_options['https'] = HTTPS_PROXY
-
-    ## Socks proxy
-    proxy_options['http'] = SOCKS_PROXY
-    proxy_options['https'] = SOCKS_PROXY
+    # Selenium Wire proxy config: prefer SOCKS if present
+    proxy_options = {
+        'no_proxy': 'localhost,127.0.0.1'
+    }
+    if SOCKS_PROXY:
+        proxy_options['http'] = SOCKS_PROXY
+        proxy_options['https'] = SOCKS_PROXY
+    else:
+        proxy_options['http'] = HTTP_PROXY
+        proxy_options['https'] = HTTP_PROXY
 
     seleniumwire_options['proxy'] = proxy_options
+
     # prox = Proxy()
     # prox.proxy_type = ProxyType.MANUAL
     # prox.socks_proxy = SOCKS_PROXY
@@ -408,86 +573,91 @@ def main():
                 last_name_tag.send_keys(last_name)
                 print(last_name)
                 print('################ Click "Next" Button ################')
-                clicked = False
-                for selector in SELECTORS['next']:
-                    try:
-                        el = WebDriverWait(driver, WAIT).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        # Regular click sometimes gets blocked by overlays; JS click as a backup:
-                        try:
-                            el.click()
-                        except Exception:
-                            driver.execute_script("arguments[0].click();", el)
-                        clicked = True
-                        break
-                    except Exception:
-                        pass
-
-                if not clicked:
-                    print("Could not find a clickable Next button with the current selectors.")
+                if not click_next(driver, WAIT):
                     raise Exception("Go to next account.")
+                WebDriverWait(driver, 10).until(lambda d: True)
+                print("Errors:", collect_errors(driver))
+
+                # Usage right after submit:
+                # click submit...
+                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
+                print("Errors:", collect_errors(driver))
+
                 print('################ 2st step of Creation Wizard. ################')
                 print('################ Birthday & Gender ################')
-                # Date
-                WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_day']))).send_keys(birthday.split('/')[1])
 
-                # Month
-                select_acc_month = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_month'])))
+                # birthday is "MM/DD/YYYY"
+                mm, dd, yyyy = birthday.split('/')
 
-                acc_month = Select(select_acc_month)
-                acc_month.select_by_value(birthday.split('/')[0])
+                # Day
+                set_input(driver, SELECTORS['acc_day'], dd.lstrip('0'))
+
+                # Month (1..12)
+                select_combobox_by_value(
+                    driver,
+                    SELECTORS['acc_month_box'],
+                    SELECTORS['acc_month_list'],
+                    str(int(mm))  # remove leading zero
+                )
 
                 # Year
-                WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_year']))).send_keys(birthday.split('/')[2])
+                set_input(driver, SELECTORS['acc_year'], yyyy)
 
-                select_acc_gender = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['acc_gender'])))
+                # Gender (per your snippet: 1=Male, 2=Female, 3=Rather not say, 4=Custom)
+                select_combobox_by_value(
+                    driver,
+                    SELECTORS['acc_gender_box'],
+                    SELECTORS['acc_gender_list'],
+                    '1'  # Male
+                )
 
-                # Gender
-                acc_gender = Select(select_acc_gender)
-                acc_gender.select_by_value('1')
-
-               #click next button
-                print('################ Click "Next" Buton ################')
-                for selector in SELECTORS['next']:
-                    try:
-                        WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, selector))).click()
-                        break
-                    except:
-                        pass
-                time.sleep(WAIT*2)
-
-                # set username
-                print('################ Set User Name ################')
-                if user_name_manual == "":
-                    rand_5_digit_num = random.randint(10000,99999)
-                    user_name = first_name +"."+ last_name
-                    user_name = user_name.lower() + str(rand_5_digit_num)
-                else:
-                    user_name = user_name_manual
-                try:
-                    WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['username_select']))).click()
-                except:
-                    pass
-                try:
-                    user_name_tag = WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['username'])))
-                    user_name_tag.clear()
-                    print(user_name)
-                    time.sleep(WAIT/2)
-                    user_name_tag.send_keys(user_name)
-                # time.sleep(WAIT*1000)
-                except:
-                    pass
 
                 #click next button
-                print('################ Click "Next" Buton ################')
-                for selector in SELECTORS['next']:
-                    try:
-                        WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, selector))).click()
-                        break
-                    except:
-                        pass
-                time.sleep(WAIT*2)
+                print('################ Click "Next" Button ################')
+                if not click_next(driver, WAIT):
+                    raise Exception("Go to next account.")
+                WebDriverWait(driver, 10).until(lambda d: True)
+                print("Errors:", collect_errors(driver))
+
+                # Usage right after submit:
+                # click submit...
+                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
+                print("Errors:", collect_errors(driver))
+
+                # Page for selecting email address
+                print('################ 3st step of Creation Wizard. ################')
+                print('################ Select Custom Gmail Address ################')
+                rand_5_digit_num = random.randint(10000, 99999)
+                base = f"{first_name}.{last_name}{rand_5_digit_num}"
+                user_name = sanitize_gmail_username(base)
+
+                # Click "Create your own Gmail address"
+                radio = WebDriverWait(driver, WAIT).until(
+                    EC.element_to_be_clickable((By.XPATH, SELECTORS["radio_custom_wrapper"]))
+                )
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", radio)
+                radio.click()
+
+                box = WebDriverWait(driver, WAIT).until(
+                    EC.visibility_of_element_located((By.XPATH, SELECTORS["custom_username_input"]))
+                )
+                box.clear()
+                box.send_keys(user_name)
+
+
+                #click next button
+                print('################ Click "Next" Button ################')
+                if not click_next(driver, WAIT):
+                    raise Exception("Go to next account.")
+                WebDriverWait(driver, 10).until(lambda d: True)
+                print("Errors:", collect_errors(driver))
+
+                # Usage right after submit:
+                # click submit...
+                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
+                print("Errors:", collect_errors(driver))
+
+
                 print('################ Check Username Validation ################')
                 try:
                     WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, SELECTORS['username_warning'])))
@@ -511,14 +681,25 @@ def main():
                 confirmwd_tag.send_keys(password)
 
                 #click next button
-                print('################ Click "Next" Buton ################')
-                for selector in SELECTORS['next']:
-                    try:
-                        WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, selector))).click()
-                        break
-                    except:
-                        pass
-                time.sleep(WAIT*2)
+                print('################ Click "Next" Button ################')
+                if not click_next(driver, WAIT):
+                    raise Exception("Go to next account.")
+                WebDriverWait(driver, 10).until(lambda d: True)
+                print("Errors:", collect_errors(driver))
+
+                errs = collect_errors(driver)
+                if errs:
+                    print("Submit returned errors:", errs)
+                    # If username-related, just retry
+                    if any("username" in e.lower() or "address" in e.lower() for e in errs):
+                        user_name_manual = ""
+                        username_try += 1
+                        continue
+
+                # Usage right after submit:
+                # click submit...
+                WebDriverWait(driver, 10).until(lambda d: True)  # small tick
+                print("Errors:", collect_errors(driver))
 
                 print('################ Check Phone Verification ################')
                 without_verification = False
@@ -565,13 +746,11 @@ def main():
                 phone_number_input.send_keys(number)
 
                 #click next button
-                print('################ Click "Next" Buton ################')
-                for selector in SELECTORS['next']:
-                    try:
-                        WebDriverWait(driver, WAIT).until(EC.presence_of_element_located((By.XPATH, selector))).click()
-                        break
-                    except:
-                        pass
+                print('################ Click "Next" Button ################')
+                if not click_next(driver, WAIT):
+                    raise Exception("Go to next account.")
+                WebDriverWait(driver, 10).until(lambda d: True)
+                print("Errors:", collect_errors(driver))
 
                 print('################ Get SMS Code from SMS_Activate ################')
                 time.sleep(WAIT)
